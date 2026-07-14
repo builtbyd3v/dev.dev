@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>dev.dev</title>
+<style>
+  :root {
+    --bg: #0b0b0c;
+    --surface: #141417;
+    --surface-hover: #1a1a1e;
+    --text: #f2f2f4;
+    --muted: #8b8b95;
+    --faint: #56565f;
+    --border: rgba(255, 255, 255, 0.07);
+    --border-hover: rgba(45, 212, 191, 0.45);
+    --accent: #2dd4bf;
+    --accent-dim: rgba(45, 212, 191, 0.14);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100%;
+    padding: 48px 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  /* faint dot-grid texture */
+  body::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image: radial-gradient(circle, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 22px 22px;
+    pointer-events: none;
+  }
+  .stage {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 560px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .wordmark {
+    font-size: 44px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0;
+  }
+  .wordmark .dot { color: var(--accent); }
+  .caret {
+    display: inline-block;
+    width: 0.5em; height: 1.05em;
+    margin-left: 0.12em;
+    background: var(--accent);
+    border-radius: 2px;
+    transform: translateY(0.12em);
+    animation: blink 1.1s steps(1) infinite;
+    box-shadow: 0 0 14px rgba(45, 212, 191, 0.5);
+  }
+  @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+  .tagline {
+    margin-top: 20px;
+    font-size: 15px;
+    color: var(--text);
+    letter-spacing: 0.01em;
+  }
+  .sub {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .cards {
+    margin-top: 40px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--faint);
+    text-align: left;
+    margin-bottom: 4px;
+    padding-left: 2px;
+  }
+  .card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    text-decoration: none;
+    color: var(--text);
+    transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+  }
+  .card:hover {
+    background: var(--surface-hover);
+    border-color: var(--border-hover);
+    transform: translateY(-1px);
+  }
+  .card .glyph {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 10px rgba(45, 212, 191, 0.6);
+    flex: none;
+  }
+  .card .host {
+    font-size: 15px;
+    font-weight: 500;
+  }
+  .card .host .port { color: var(--accent); }
+  .card .fw {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .card .arrow {
+    color: var(--faint);
+    font-size: 15px;
+    transition: transform 0.14s ease, color 0.14s ease;
+  }
+  .card:hover .arrow { color: var(--accent); transform: translateX(2px); }
+  footer {
+    position: absolute;
+    bottom: 18px; left: 0; right: 0;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    padding: 0 22px;
+    font-size: 11px;
+    color: var(--faint);
+    letter-spacing: 0.02em;
+  }
+  footer .kbd {
+    color: var(--muted);
+  }
+  footer .kbd b {
+    color: var(--text);
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="wordmark">dev<span class="dot">.</span>dev<span class="caret"></span></div>
+    <div class="tagline">Preview where you build.</div>
+    <div class="sub">Start a dev server or type a URL above.</div>
+
+    <div class="cards">
+      <div class="label">Suggested dev servers</div>
+      <a class="card" href="http://localhost:3000">
+        <span class="glyph"></span>
+        <span class="host">localhost<span class="port">:3000</span></span>
+        <span class="fw">Next.js · CRA</span>
+        <span class="arrow">&#8594;</span>
+      </a>
+      <a class="card" href="http://localhost:5173">
+        <span class="glyph"></span>
+        <span class="host">localhost<span class="port">:5173</span></span>
+        <span class="fw">Vite</span>
+        <span class="arrow">&#8594;</span>
+      </a>
+      <a class="card" href="http://localhost:8080">
+        <span class="glyph"></span>
+        <span class="host">localhost<span class="port">:8080</span></span>
+        <span class="fw">Dev server</span>
+        <span class="arrow">&#8594;</span>
+      </a>
+    </div>
+  </div>
+
+  <footer>
+    <span>dev.dev — unofficial Warp fork</span>
+    <span class="kbd"><b>Ctrl</b> <b>&#8679;</b> <b>B</b> to toggle</span>
+  </footer>
+</body>
+</html>
