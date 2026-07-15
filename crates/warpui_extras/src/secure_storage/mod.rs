@@ -51,7 +51,7 @@ pub type Model = Box<dyn SecureStorage>;
 /// The service name is used as a namespace for the application's secrets.  It
 /// is recommended that this be a unique identifier for the application; one
 /// common scheme is reverse-DNS notation (e.g.: "dev.warp.Warp").
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn register(service_name: &str, ctx: &mut warpui_core::AppContext) {
     ctx.add_singleton_model(|_| -> Model { Box::new(imp::SecureStorage::new(service_name)) });
 }
@@ -82,9 +82,10 @@ pub fn register_with_fallback(
     });
 }
 
-/// Registers a Windows-native Secure Storage provider
-/// that uses the provided directory to store data in encrypted files.
-#[cfg(target_os = "windows")]
+/// Registers a file-backed Secure Storage provider that uses the provided
+/// directory to store data in per-key files. On Windows the files are
+/// DPAPI-encrypted; on macOS they are owner-only (0600) plaintext.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub fn register_with_dir(
     service_name: &str,
     storage_dir: std::path::PathBuf,
