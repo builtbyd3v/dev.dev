@@ -738,9 +738,18 @@ if [[ $SELFSIGN = true ]]; then
   fi
   if [[ "$ARTIFACT" == app ]]; then
     echo "Self-signing $BUNDLE_DIR/$WARP_APP_NAME.app with ${SIGNING_CERT}..."
+    # Strip extended attributes first: when the bundle is built under a
+    # Spotlight-indexed path (e.g. ~/Documents), Finder stamps
+    # com.apple.FinderInfo on the .app, which makes codesign abort with
+    # "resource fork, Finder information, or similar detritus not allowed".
+    # ponytail: clears the sign-time failure; a Finder-indexed build path can
+    # still re-stamp FinderInfo afterward, so `codesign --verify --strict` may
+    # warn. Sign from a temp (non-indexed) copy if a strict-clean seal matters.
+    xattr -cr "$BUNDLE_DIR/$WARP_APP_NAME.app"
     codesign --force --deep --options runtime --sign "$SIGNING_CERT" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Debug-Entitlements.plist
   elif [[ "$ARTIFACT" == cli || "$ARTIFACT" == warpctrl || "$ARTIFACT" == tui ]]; then
     echo "Self-signing $OUT_DIR/$WARP_BIN with ${SIGNING_CERT}..."
+    xattr -cr "$OUT_DIR/$WARP_BIN"
     codesign --force --options runtime --sign "$SIGNING_CERT" "$OUT_DIR/$WARP_BIN" --entitlements script/Debug-Entitlements.plist
   fi
 elif [[ $CODESIGN = true ]]; then
