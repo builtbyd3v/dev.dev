@@ -180,6 +180,14 @@ pub struct WebViewHost {
     on_favicon_changed: Rc<RefCell<Option<Box<dyn Fn(Option<String>)>>>>,
     #[cfg(target_os = "windows")]
     webview: RefCell<Option<wry::WebView>>,
+    /// Holds the wry [`WebContext`](wry::WebContext) that pins the WebView2 user-data directory to
+    /// a writable per-user path (see `webview_data_directory`). WebView2 otherwise defaults its
+    /// user-data folder to a directory *next to the executable*; for an installed build under
+    /// `C:\Program Files` that path isn't writable, so webview creation fails with `0x80070005
+    /// Access is denied` and the pane renders blank. wry requires the `WebContext` to outlive the
+    /// `WebView`, so it's stored here rather than dropped after `ensure_webview`.
+    #[cfg(target_os = "windows")]
+    web_context: RefCell<Option<wry::WebContext>>,
     /// Set by [`WebViewHostElement::paint`], consumed (and reset) by
     /// [`sweep_unpainted_webviews`] after each full scene build for this host's window; a host
     /// whose flag is still `false` at sweep time wasn't painted this frame and gets hidden.
@@ -190,6 +198,19 @@ pub struct WebViewHost {
     /// HWND while it holds focus would otherwise leave focus nowhere and keyboard input dead.
     #[cfg(target_os = "windows")]
     parent_hwnd: Cell<Option<isize>>,
+}
+
+/// A writable directory for WebView2's user-data folder, under `%LOCALAPPDATA%`. Created if
+/// missing. Returns `None` only if `%LOCALAPPDATA%` is unset or the directory can't be created, in
+/// which case wry falls back to its default (next-to-exe) path — fine for a dev build run from a
+/// writable target dir, but the whole reason this exists is that the default is not writable for an
+/// installed build under `C:\Program Files`.
+#[cfg(target_os = "windows")]
+fn webview_data_directory() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    let dir = std::path::PathBuf::from(base).join("dev.dev").join("WebView2");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 impl WebViewHost {
@@ -209,6 +230,8 @@ impl WebViewHost {
             on_favicon_changed: Rc::new(RefCell::new(None)),
             #[cfg(target_os = "windows")]
             webview: RefCell::new(None),
+            #[cfg(target_os = "windows")]
+            web_context: RefCell::new(None),
             #[cfg(target_os = "windows")]
             painted_this_frame: Cell::new(false),
             #[cfg(target_os = "windows")]
@@ -777,10 +800,17 @@ impl WebViewHost {
         let on_element_selected = self.on_element_selected.clone();
         let favicon = self.favicon.clone();
         let on_favicon_changed = self.on_favicon_changed.clone();
+        // Pin WebView2's user-data folder to a writable per-user directory. Without this it
+        // defaults to a folder next to the .exe, which fails with "Access is denied" for an
+        // installed build under C:\Program Files (see the `web_context` field doc).
+        let mut web_context = wry::WebContext::new(webview_data_directory());
         // Start page (see `new_start_page`) loads inline HTML instead of navigating to a URL.
         let builder = match self.start_html.borrow().as_ref() {
-            Some(html) => wry::WebViewBuilder::new().with_html(html.clone()),
-            None => wry::WebViewBuilder::new().with_url(self.url.borrow().as_str()),
+            Some(html) => {
+                wry::WebViewBuilder::new_with_web_context(&mut web_context).with_html(html.clone())
+            }
+            None => wry::WebViewBuilder::new_with_web_context(&mut web_context)
+                .with_url(self.url.borrow().as_str()),
         };
         let webview = builder
             // Don't yank keyboard focus from the terminal when the webview is created.
@@ -831,6 +861,8 @@ impl WebViewHost {
             Ok(webview) => {
                 let _ = webview.set_visible(!self.hidden.get());
                 *self.webview.borrow_mut() = Some(webview);
+                // wry requires the WebContext to outlive the WebView; keep it alive here.
+                *self.web_context.borrow_mut() = Some(web_context);
             }
             Err(err) => {
                 log::error!("Failed to create WebView2 child webview: {err}");
