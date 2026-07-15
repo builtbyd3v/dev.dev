@@ -1006,7 +1006,7 @@ impl EventLoop {
                 // whose element didn't paint into it (e.g. its tab is backgrounded) is not on
                 // screen and its native child HWND must be hidden, or it'd keep floating over
                 // whatever replaced its pane.
-                #[cfg(target_os = "windows")]
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
                 crate::webview_host::sweep_unpainted_webviews(window_id);
                 Some(scene)
             } else {

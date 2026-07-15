@@ -84,6 +84,8 @@ objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
     "NSAlert",
     "NSApplication",
+    "NSBitmapImageRep",
+    "NSImageRep",
     "NSButton",
     "NSCell",
     "NSControl",
@@ -104,6 +106,8 @@ objc2-av-foundation = { workspace = true, features = ["AVCaptureDevice", "AVMedi
 objc2-foundation = { workspace = true, features = [
     "NSArray",
     "NSData",
+    "NSDictionary",
+    "NSError",
     "NSGeometry",
     "NSString",
     "NSURL",
@@ -136,6 +140,22 @@ objc2-quartz-core = { workspace = true, features = [
     "objc2-metal",
 ] }
 dispatch2 = { workspace = true }
+# Needed by the macOS webview host (`webview_host.rs`): serde derives on the IPC envelope +
+# serde_json for `element_center` / result parsing, same as the non-macOS block provides.
+serde.workspace = true
+serde_json.workspace = true
+# macOS screenshot capture (`WebViewHost::capture_screenshot`): reach the `WKWebView` behind
+# wry's `WebViewExtMacOS::webview()` and call `takeSnapshotWithConfiguration:completionHandler:`,
+# then encode the `NSImage` to PNG via `NSBitmapImageRep`. Pinned to the 0.3.2 line wry already
+# pulls in so cargo unifies to one `objc2-web-kit`.
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+    "WKWebView",
+    "WKSnapshotConfiguration",
+    "block2",
+] }
+# Match the block2 major objc2-web-kit 0.3.2 builds its completion-handler blocks against, so
+# the `RcBlock` we hand `takeSnapshot` is the same `Block` type it expects.
+block2 = "0.6"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rand.workspace = true

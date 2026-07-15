@@ -4,9 +4,9 @@
 //! for a `localhost:PORT`-shaped URL -- never fires). This is the slow-but-reliable fallback:
 //! output-scan is the instant path when it works, this poll loop is the safety net.
 //!
-//! Windows-only for now (the [`snapshot_listening_ports`] implementation uses
-//! `GetExtendedTcpTable`); other platforms just never produce new ports and the feature is
-//! effectively a no-op there. Wired into [`crate::workspace::view::WorkspaceView`], which owns a
+//! Implemented on Windows (via `GetExtendedTcpTable`) and macOS (via `lsof`); other platforms
+//! just never produce new ports and the feature is effectively a no-op there. Wired into
+//! [`crate::workspace::view::WorkspaceView`], which owns a
 //! [`PortWatcherState`] and re-schedules a poll of [`snapshot_listening_ports`] every
 //! [`POLL_INTERVAL`] via the app's normal `ctx.spawn` + `Timer::after` idiom (see
 //! `schedule_next_port_watcher_poll`).
@@ -101,11 +101,57 @@ pub fn snapshot_listening_ports() -> HashSet<u16> {
     windows_impl::snapshot_listening_ports()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn snapshot_listening_ports() -> HashSet<u16> {
+    macos_impl::snapshot_listening_ports()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn snapshot_listening_ports() -> HashSet<u16> {
     // No enumeration API wired up for this platform yet -- the port watcher becomes a no-op
     // (never observes new ports) rather than a compile error. Output-scan detection still works.
     HashSet::new()
+}
+
+#[cfg(target_os = "macos")]
+mod macos_impl {
+    use std::collections::HashSet;
+    use std::process::Command;
+
+    use super::is_candidate_port;
+
+    /// Enumerates ports with a bound LISTEN socket by shelling out to `lsof`, filtered to
+    /// [`super::is_candidate_port`]. `lsof` ships with macOS, so no crate/FFI is pulled in for
+    /// what runs once every `POLL_INTERVAL`.
+    ///
+    /// ponytail: shells out + parses text instead of libproc FFI (`proc_pidfdinfo` /
+    /// `PROC_PIDFDSOCKETINFO`). Move to libproc only if `lsof`'s ~tens-of-ms process spawn shows
+    /// up on the poll loop.
+    pub(super) fn snapshot_listening_ports() -> HashSet<u16> {
+        // `-nP` skips host/port name resolution (faster, and keeps ports numeric); `-iTCP
+        // -sTCP:LISTEN` restricts to listening TCP sockets; `-F n` prints just the NAME field
+        // one per line (e.g. `n127.0.0.1:3000`, `n[::1]:8080`, `n*:5173`).
+        let output = match Command::new("lsof")
+            .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "n"])
+            .output()
+        {
+            Ok(output) => output,
+            Err(err) => {
+                log::warn!("port_watcher: failed to run lsof: {err}");
+                return HashSet::new();
+            }
+        };
+
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix('n'))
+            // Port is whatever follows the last colon (`host:port`); rsplit handles the IPv6
+            // `[::1]:PORT` form since the port colon is always the last one.
+            .filter_map(|name| name.rsplit_once(':').map(|(_, port)| port))
+            .filter_map(|port| port.parse::<u16>().ok())
+            .filter(|port| is_candidate_port(*port))
+            .collect()
+    }
 }
 
 #[cfg(target_os = "windows")]

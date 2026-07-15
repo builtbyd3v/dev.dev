@@ -1027,6 +1027,21 @@ impl platform::Window for Window {
     fn set_titlebar_height(&self, height: f64) {
         self.0.set_titlebar_height(height);
     }
+
+    /// Returns an `AppKit` handle to the window's content `NSView` so an embedder — the browser
+    /// pane's [`WebViewHost`](crate::webview_host::WebViewHost) — can attach a `WKWebView` as a
+    /// child subview via wry's `build_as_child`. The `platform::Window` trait defaults this to
+    /// `None`; on macOS the default left `ensure_webview` unable to resolve a native handle, so the
+    /// `WKWebView` was never created and the browser pane rendered blank. The returned pointer
+    /// aliases the content view owned by the (live) `NSWindow`; the embedder only borrows it
+    /// synchronously while building/resizing the child webview, so it stays valid for that use.
+    fn raw_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
+        let view = self.0.window().contentView()?;
+        let ptr = std::ptr::NonNull::new(Retained::as_ptr(&view) as *mut std::ffi::c_void)?;
+        Some(raw_window_handle::RawWindowHandle::AppKit(
+            raw_window_handle::AppKitWindowHandle::new(ptr),
+        ))
+    }
 }
 
 impl platform::WindowContext for Window {

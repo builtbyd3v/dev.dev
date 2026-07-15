@@ -2,12 +2,12 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use pathfinder_color::ColorU;
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use warpui_core::elements::Fill;
 use warpui_core::elements::{Element, Point};
 use warpui_core::event::DispatchedEvent;
@@ -27,7 +27,7 @@ const INIT_SCRIPT: &str = include_str!("webview_init.js");
 /// `webview_init.js`, which keeps its own copy for future client-side pulls).
 const CONSOLE_BUFFER_CAP: usize = 200;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 thread_local! {
     /// Weak handles to every live [`WebViewHost`] created on this (UI) thread, so
     /// [`sweep_unpainted_webviews`] can find webviews whose element didn't paint in the frame
@@ -36,12 +36,13 @@ thread_local! {
 }
 
 /// Hides any webview belonging to `window_id` whose element wasn't painted in the scene that was
-/// just built (e.g. its tab is backgrounded). The webview is a native child HWND layered over the
-/// window's client area, so without this it would keep floating over whatever replaced its pane.
-/// Call once per window, right after a full scene build (a scene build is the one complete paint
-/// pass, so "not painted" reliably means "not on screen"). Re-showing happens in
-/// [`WebViewHostElement::paint`] when the pane becomes visible again.
-#[cfg(target_os = "windows")]
+/// just built (e.g. its tab is backgrounded). The webview is a native child surface (a child HWND
+/// on Windows, a `WKWebView` NSView subview on macOS) layered over the window's client area, so
+/// without this it would keep floating over whatever replaced its pane. Call once per window,
+/// right after a full scene build (a scene build is the one complete paint pass, so "not painted"
+/// reliably means "not on screen"). Re-showing happens in [`WebViewHostElement::paint`] when the
+/// pane becomes visible again.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub fn sweep_unpainted_webviews(window_id: WindowId) {
     WEBVIEW_HOSTS.with(|hosts| {
         hosts.borrow_mut().retain(|weak| {
@@ -178,7 +179,7 @@ pub struct WebViewHost {
     /// Set via `set_on_favicon_changed`; invoked by the ipc handler whenever `favicon` changes.
     /// Same one-callback shape as `on_loading_changed`.
     on_favicon_changed: Rc<RefCell<Option<Box<dyn Fn(Option<String>)>>>>,
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     webview: RefCell<Option<wry::WebView>>,
     /// Holds the wry [`WebContext`](wry::WebContext) that pins the WebView2 user-data directory to
     /// a writable per-user path (see `webview_data_directory`). WebView2 otherwise defaults its
@@ -191,7 +192,7 @@ pub struct WebViewHost {
     /// Set by [`WebViewHostElement::paint`], consumed (and reset) by
     /// [`sweep_unpainted_webviews`] after each full scene build for this host's window; a host
     /// whose flag is still `false` at sweep time wasn't painted this frame and gets hidden.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     painted_this_frame: Cell<bool>,
     /// The parent (main winit window) HWND the webview was built as a child of, recorded by
     /// `ensure_webview` so `destroy` can hand keyboard focus back to it — destroying the child
@@ -228,16 +229,16 @@ impl WebViewHost {
             on_element_selected: Rc::new(RefCell::new(None)),
             favicon: Rc::new(RefCell::new(None)),
             on_favicon_changed: Rc::new(RefCell::new(None)),
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             webview: RefCell::new(None),
             #[cfg(target_os = "windows")]
             web_context: RefCell::new(None),
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             painted_this_frame: Cell::new(false),
             #[cfg(target_os = "windows")]
             parent_hwnd: Cell::new(None),
         });
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         WEBVIEW_HOSTS.with(|hosts| hosts.borrow_mut().push(Rc::downgrade(&host)));
         host
     }
@@ -268,8 +269,17 @@ impl WebViewHost {
                 callback(None);
             }
         }
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         if let Some(webview) = self.webview.borrow().as_ref() {
+            // macOS: wry's `navigate_to_url` does `NSURL::URLWithString(url).unwrap()`, which
+            // panics — taking down the whole terminal app — when AppKit returns nil for a malformed
+            // URL (raw spaces, control chars, no scheme). Skip the navigation instead. WebView2 on
+            // Windows tolerates these, so only macOS needs the guard.
+            #[cfg(target_os = "macos")]
+            if !is_navigable_url(url) {
+                log::warn!("Ignoring browser navigation to malformed URL: {url:?}");
+                return;
+            }
             let _ = webview.load_url(url);
         }
     }
@@ -321,14 +331,14 @@ impl WebViewHost {
 
     /// Reloads the current page. Unlike back/forward, wry exposes this natively on `WebView`
     /// (backed by `ICoreWebView2::Reload` under the hood on Windows), so no COM call needed here.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn reload(&self) {
         if let Some(webview) = self.webview.borrow().as_ref() {
             let _ = webview.reload();
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn reload(&self) {}
 
     /// Opens the WebView2 DevTools window for this webview (`ICoreWebView2::OpenDevToolsWindow`).
@@ -399,11 +409,53 @@ impl WebViewHost {
         }
     }
 
+    /// Captures a screenshot of the current page and hands decoded PNG bytes to `callback`.
+    /// macOS has no CDP `Page.captureScreenshot`; instead it reaches the `WKWebView` behind wry's
+    /// `WebViewExtMacOS::webview()` and calls `takeSnapshotWithConfiguration:completionHandler:`
+    /// (nil config = the full visible view), then encodes the resulting `NSImage` to PNG via
+    /// `NSBitmapImageRep`.
+    ///
+    /// The completion block is delivered asynchronously on the main (UI) thread — the same thread
+    /// that issued the call — so `callback` never crosses threads and needs no `Send` bound, same
+    /// reentrancy guarantee the Windows CDP path relies on.
+    #[cfg(target_os = "macos")]
+    pub fn capture_screenshot(&self, callback: impl FnOnce(anyhow::Result<Vec<u8>>) + 'static) {
+        use wry::WebViewExtMacOS;
+
+        let wk = {
+            let webview_ref = self.webview.borrow();
+            let Some(webview) = webview_ref.as_ref() else {
+                drop(webview_ref);
+                callback(Err(anyhow::anyhow!(
+                    "capture_screenshot called before the webview was created"
+                )));
+                return;
+            };
+            webview.webview()
+        };
+
+        // The completion block is `Fn` (may be retained/called by the OS), but our `callback` is
+        // `FnOnce`; guard it so it fires exactly once, same pattern as the Windows CDP handlers.
+        let callback = Rc::new(RefCell::new(Some(callback)));
+        let handler = block2::RcBlock::new(
+            move |image: *mut objc2_app_kit::NSImage, error: *mut objc2_foundation::NSError| {
+                if let Some(cb) = callback.borrow_mut().take() {
+                    cb(snapshot_image_to_png(image, error));
+                }
+            },
+        );
+        // Safety: `wk` is a live `WKWebView`; the block outlives the async call (owned by the
+        // RcBlock, retained by the OS until it fires). Passing nil config snapshots the whole view.
+        unsafe {
+            wk.takeSnapshotWithConfiguration_completionHandler(None, &handler);
+        }
+    }
+
     /// No webview support on this platform yet; always reports an error.
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn capture_screenshot(&self, callback: impl FnOnce(anyhow::Result<Vec<u8>>) + 'static) {
         callback(Err(anyhow::anyhow!(
-            "Screenshot capture is only implemented on Windows"
+            "Screenshot capture is not implemented on this platform"
         )));
     }
 
@@ -516,10 +568,37 @@ impl WebViewHost {
         }
     }
 
+    /// Dispatches a synthetic left click at CSS-pixel coordinates `(x, y)`. macOS has no CDP, so
+    /// the click is synthesized in-page via JS (`elementFromPoint` + `MouseEvent`s) through
+    /// `evaluate_js`, rather than the real `Input.dispatchMouseEvent` used on Windows. The events
+    /// carry `isTrusted = false`, which a few pages gate on, but drives ordinary click handlers.
+    /// `element_center` scrolled the target into view first, so `(x, y)` is a live viewport point.
+    #[cfg(target_os = "macos")]
+    pub fn send_click(&self, x: f64, y: f64, callback: impl FnOnce(anyhow::Result<()>) + 'static) {
+        let js = format!(
+            "(() => {{ \
+                const el = document.elementFromPoint({x}, {y}); \
+                if (!el) return false; \
+                const opts = {{ bubbles: true, cancelable: true, clientX: {x}, clientY: {y}, view: window }}; \
+                el.dispatchEvent(new MouseEvent('mousedown', opts)); \
+                el.dispatchEvent(new MouseEvent('mouseup', opts)); \
+                el.dispatchEvent(new MouseEvent('click', opts)); \
+                return true; \
+            }})()"
+        );
+        self.evaluate_js(&js, move |result| {
+            callback(result.and_then(|json| match json.trim() {
+                "true" => Ok(()),
+                "false" => Err(anyhow::anyhow!("No element at ({x}, {y}) to click")),
+                other => Err(anyhow::anyhow!("Unexpected send_click result: {other}")),
+            }));
+        });
+    }
+
     /// No webview support on this platform yet; always reports an error.
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn send_click(&self, _x: f64, _y: f64, callback: impl FnOnce(anyhow::Result<()>) + 'static) {
-        callback(Err(anyhow::anyhow!("send_click is only implemented on Windows")));
+        callback(Err(anyhow::anyhow!("send_click is not implemented on this platform")));
     }
 
     /// Inserts `text` at the current focus/caret via CDP `Input.insertText` (assumes the page has
@@ -563,10 +642,44 @@ impl WebViewHost {
         }
     }
 
+    /// Inserts `text` at the current focus/caret. macOS has no CDP `Input.insertText`, so this
+    /// types into `document.activeElement` via JS through `evaluate_js`. `execCommand('insertText')`
+    /// is tried first because it fires the proper `beforeinput`/`input` events for both
+    /// `<input>`/`<textarea>` and `contenteditable`; it falls back to the prototype's native value
+    /// setter (a plain `el.value =` is swallowed by React's controlled inputs — the documented
+    /// weakness of JS synthesis vs. real input events). `text` is JSON-encoded so any content is
+    /// safe inside the JS string literal.
+    #[cfg(target_os = "macos")]
+    pub fn insert_text(&self, text: &str, callback: impl FnOnce(anyhow::Result<()>) + 'static) {
+        let text_json = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string());
+        let js = format!(
+            "(() => {{ \
+                const el = document.activeElement; \
+                if (!el) return false; \
+                const text = {text_json}; \
+                if (document.execCommand && document.execCommand('insertText', false, text)) return true; \
+                const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; \
+                const setter = Object.getOwnPropertyDescriptor(proto, 'value'); \
+                if (setter && setter.set) {{ setter.set.call(el, (el.value || '') + text); }} \
+                else if ('value' in el) {{ el.value = (el.value || '') + text; }} \
+                else {{ return false; }} \
+                el.dispatchEvent(new Event('input', {{ bubbles: true }})); \
+                el.dispatchEvent(new Event('change', {{ bubbles: true }})); \
+                return true; \
+            }})()"
+        );
+        self.evaluate_js(&js, move |result| {
+            callback(result.and_then(|json| match json.trim() {
+                "true" => Ok(()),
+                _ => Err(anyhow::anyhow!("insert_text found no editable focused element")),
+            }));
+        });
+    }
+
     /// No webview support on this platform yet; always reports an error.
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn insert_text(&self, _text: &str, callback: impl FnOnce(anyhow::Result<()>) + 'static) {
-        callback(Err(anyhow::anyhow!("insert_text is only implemented on Windows")));
+        callback(Err(anyhow::anyhow!("insert_text is not implemented on this platform")));
     }
 
     /// Runs `js` in the page and hands the JSON-serialized result to `callback`. Public wrapper
@@ -577,7 +690,7 @@ impl WebViewHost {
     /// wry's callback bound requires `Fn(String) + Send`, but WebView2 only ever invokes it
     /// synchronously on this same COM-STA/UI thread (never across threads), so wrapping the
     /// non-`Send` `Rc` guard in `AssertSendOnUiThread` is sound — see its doc comment.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn evaluate_js(&self, js: &str, callback: impl FnOnce(anyhow::Result<String>) + 'static) {
         let webview_ref = self.webview.borrow();
         let Some(webview) = webview_ref.as_ref() else {
@@ -608,9 +721,9 @@ impl WebViewHost {
     }
 
     /// No webview support on this platform yet; always reports an error.
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn evaluate_js(&self, _js: &str, callback: impl FnOnce(anyhow::Result<String>) + 'static) {
-        callback(Err(anyhow::anyhow!("evaluate_js is only implemented on Windows")));
+        callback(Err(anyhow::anyhow!("evaluate_js is not implemented on this platform")));
     }
 
     /// Resolves `selector` (a CSS selector) to its element's viewport-center point in CSS pixels,
@@ -646,14 +759,14 @@ impl WebViewHost {
     /// elements, clicking reports one via `set_on_element_selected`, Escape cancels. Just an
     /// `evaluate_script` call into the init script's global `__warpSelector.start()` — no new COM
     /// plumbing needed, unlike `capture_screenshot`.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn start_element_selection(&self) {
         if let Some(webview) = self.webview.borrow().as_ref() {
             let _ = webview.evaluate_script("window.__warpSelector && window.__warpSelector.start();");
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn start_element_selection(&self) {}
 
     /// Clones out the current console ring buffer (most recent `CONSOLE_BUFFER_CAP` entries,
@@ -708,7 +821,7 @@ impl WebViewHost {
     /// backgrounded.
     pub fn set_hidden(&self, hidden: bool) {
         self.hidden.set(hidden);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         if let Some(webview) = self.webview.borrow().as_ref() {
             let _ = webview.set_visible(!hidden);
         }
@@ -717,16 +830,19 @@ impl WebViewHost {
     /// Tears down the native webview, e.g. when the owning pane is detached/closed. Safe to call
     /// even if the webview was never created.
     pub fn destroy(&self) {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let _had_webview = self.webview.borrow_mut().take().is_some();
         #[cfg(target_os = "windows")]
         {
-            let had_webview = self.webview.borrow_mut().take().is_some();
             // Dropping the webview destroys a child HWND that may currently hold keyboard
             // focus, which would leave focus nowhere and keyboard input dead until the user
             // alt-tabs. Hand focus back to the main window. `GetFocus` returns null when focus
             // sits in another process's window (the WebView2 child HWNDs belong to
             // msedgewebview2.exe) or nowhere at all, so `!= parent` covers both cases; skip the
-            // call when the main window already has focus.
-            if had_webview {
+            // call when the main window already has focus. macOS doesn't need this: the
+            // `WKWebView` is an NSView in the responder chain and first responder falls back to
+            // the window naturally when it's removed.
+            if _had_webview {
                 if let Some(hwnd) = self.parent_hwnd.get() {
                     use windows::Win32::Foundation::HWND;
                     use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
@@ -745,7 +861,7 @@ impl WebViewHost {
     /// `destroy`) and lets the next `paint` lazily recreate it under `new_window_id`'s HWND via
     /// `ensure_webview`, at whatever URL is current (`self.url`, unaffected by this call) —
     /// history is lost, same limitation noted on `LeafContents::Browser`.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn rebind_window(&self, new_window_id: WindowId) {
         if self.window_id.get() == new_window_id {
             return;
@@ -754,7 +870,7 @@ impl WebViewHost {
         self.window_id.set(new_window_id);
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn rebind_window(&self, new_window_id: WindowId) {
         self.window_id.set(new_window_id);
     }
@@ -770,7 +886,7 @@ impl WebViewHost {
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     fn ensure_webview(&self, app: &AppContext) {
         if self.webview.borrow().is_some() {
             return;
@@ -781,6 +897,9 @@ impl WebViewHost {
         let Some(raw_handle) = window.raw_window_handle() else {
             return;
         };
+        // Windows records the parent HWND so `destroy` can hand keyboard focus back to it; macOS
+        // gets an `AppKit` NSView handle instead and needs no such reclaim (see `destroy`).
+        #[cfg(target_os = "windows")]
         if let raw_window_handle::RawWindowHandle::Win32(win32) = raw_handle {
             self.parent_hwnd.set(Some(win32.hwnd.get()));
         }
@@ -800,21 +919,45 @@ impl WebViewHost {
         let on_element_selected = self.on_element_selected.clone();
         let favicon = self.favicon.clone();
         let on_favicon_changed = self.on_favicon_changed.clone();
-        // Pin WebView2's user-data folder to a writable per-user directory. Without this it
-        // defaults to a folder next to the .exe, which fails with "Access is denied" for an
-        // installed build under C:\Program Files (see the `web_context` field doc).
+        // Windows pins WebView2's user-data folder to a writable per-user directory (see the
+        // `web_context` field doc); without it an installed build under `C:\Program Files` fails
+        // with "Access is denied" and the pane renders blank. macOS/WKWebView uses the per-user
+        // default data store and ignores wry's `data_directory`, so it needs no `WebContext`.
+        #[cfg(target_os = "windows")]
         let mut web_context = wry::WebContext::new(webview_data_directory());
         // Start page (see `new_start_page`) loads inline HTML instead of navigating to a URL.
         let builder = match self.start_html.borrow().as_ref() {
+            #[cfg(target_os = "windows")]
             Some(html) => {
                 wry::WebViewBuilder::new_with_web_context(&mut web_context).with_html(html.clone())
             }
+            #[cfg(target_os = "windows")]
             None => wry::WebViewBuilder::new_with_web_context(&mut web_context)
                 .with_url(self.url.borrow().as_str()),
+            #[cfg(target_os = "macos")]
+            Some(html) => wry::WebViewBuilder::new().with_html(html.clone()),
+            #[cfg(target_os = "macos")]
+            None => {
+                let url = self.url.borrow();
+                // wry's macOS `with_url` does `NSURL::URLWithString(url).unwrap()`; a malformed
+                // initial URL would panic at build time. Fall back to a blank page (same guard as
+                // `load_url`).
+                if is_navigable_url(url.as_str()) {
+                    wry::WebViewBuilder::new().with_url(url.as_str())
+                } else {
+                    wry::WebViewBuilder::new().with_html("")
+                }
+            }
         };
         let webview = builder
             // Don't yank keyboard focus from the terminal when the webview is created.
             .with_focused(false)
+            // Make the page inspectable. On Windows this pairs with `open_devtools`'s COM
+            // `OpenDevToolsWindow`. macOS has no programmatic DevTools window (see
+            // `open_devtools`'s no-op there); this instead sets `WKWebView.isInspectable` so the
+            // page can be inspected via Safari's Develop menu / right-click Inspect. Auto-enabled
+            // in debug builds; needs wry's `devtools` feature to take effect in release.
+            .with_devtools(true)
             .with_on_page_load_handler(move |event, url| {
                 *current_url.borrow_mut() = url;
                 let now_loading = matches!(event, wry::PageLoadEvent::Started);
@@ -861,16 +1004,20 @@ impl WebViewHost {
             Ok(webview) => {
                 let _ = webview.set_visible(!self.hidden.get());
                 *self.webview.borrow_mut() = Some(webview);
-                // wry requires the WebContext to outlive the WebView; keep it alive here.
-                *self.web_context.borrow_mut() = Some(web_context);
+                // wry requires the WebContext to outlive the WebView; keep it alive here. macOS
+                // uses no WebContext (see the builder above), so there's nothing to store.
+                #[cfg(target_os = "windows")]
+                {
+                    *self.web_context.borrow_mut() = Some(web_context);
+                }
             }
             Err(err) => {
-                log::error!("Failed to create WebView2 child webview: {err}");
+                log::error!("Failed to create child webview: {err}");
             }
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     fn sync_bounds(&self, origin: Vector2F, size: Vector2F, scale_factor: f32) {
         let webview_ref = self.webview.borrow();
         let Some(webview) = webview_ref.as_ref() else {
@@ -899,10 +1046,10 @@ impl WebViewHost {
 /// because WebView2 always invokes these completion callbacks synchronously on the calling
 /// COM-STA/UI thread, never on another thread — same guarantee `capture_screenshot`'s doc comment
 /// relies on for its CDP handler.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 struct AssertSendOnUiThread<T>(T);
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 unsafe impl<T> Send for AssertSendOnUiThread<T> {}
 
 /// Parses the JSON string `evaluate_js` hands back from the `element_center` JS snippet: either
@@ -921,6 +1068,47 @@ fn parse_element_center_result(json: &str) -> anyhow::Result<Option<(f64, f64)>>
         anyhow::anyhow!("Failed to parse element_center coordinates JSON: {err}")
     })?;
     Ok(Some((x, y)))
+}
+
+/// True if `url` is safe to hand to wry's macOS navigation. wry's `navigate_to_url` (and its
+/// `with_url` builder) do `NSURL::URLWithString(url).unwrap()`, which panics on the `nil` AppKit
+/// returns for a malformed URL (raw spaces, control characters, or a string with no scheme). A
+/// mistyped URL bar or an arbitrary MCP `browser_navigate` argument would otherwise crash the whole
+/// terminal app; callers skip navigation when this is false. See `load_url`.
+#[cfg(target_os = "macos")]
+fn is_navigable_url(url: &str) -> bool {
+    !url.is_empty()
+        && !url.chars().any(|c| c.is_ascii_whitespace() || c.is_control())
+        && url::Url::parse(url).is_ok()
+}
+
+/// Encodes the `NSImage` delivered by `WKWebView.takeSnapshot`'s completion block as PNG bytes
+/// (see `capture_screenshot`). `image`/`error` are the raw block arguments: exactly one is
+/// non-null. Runs on the main thread inside the block, so touching the AppKit objects is sound.
+#[cfg(target_os = "macos")]
+fn snapshot_image_to_png(
+    image: *mut objc2_app_kit::NSImage,
+    error: *mut objc2_foundation::NSError,
+) -> anyhow::Result<Vec<u8>> {
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep};
+    use objc2_foundation::NSDictionary;
+
+    let Some(image) = (unsafe { image.as_ref() }) else {
+        let detail = unsafe { error.as_ref() }
+            .map(|err| err.localizedDescription().to_string())
+            .unwrap_or_else(|| "takeSnapshot returned no image".to_string());
+        return Err(anyhow::anyhow!("Screenshot capture failed: {detail}"));
+    };
+    let tiff = image
+        .TIFFRepresentation()
+        .ok_or_else(|| anyhow::anyhow!("snapshot NSImage had no TIFF representation"))?;
+    let rep = NSBitmapImageRep::imageRepWithData(&tiff)
+        .ok_or_else(|| anyhow::anyhow!("failed to build NSBitmapImageRep from snapshot"))?;
+    let png = unsafe {
+        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }
+    .ok_or_else(|| anyhow::anyhow!("failed to encode snapshot as PNG"))?;
+    Ok(png.to_vec())
 }
 
 /// Encodes `s` as a null-terminated UTF-16 buffer and a `PCWSTR` pointing into it. The returned
@@ -978,7 +1166,7 @@ impl Element for WebViewHostElement {
         self.origin = Some(Point::from_vec2f(origin, ctx.scene.z_index()));
         let size = self.size.unwrap_or_default();
 
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             // Mark this host as painted so the post-frame sweep (`sweep_unpainted_webviews`)
             // leaves it visible, and re-show it if the sweep hid it while its pane was
@@ -995,7 +1183,7 @@ impl Element for WebViewHostElement {
             self.host.sync_bounds(origin, size, scale_factor);
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             let _ = app;
             ctx.scene
@@ -1019,5 +1207,23 @@ impl Element for WebViewHostElement {
 
     fn origin(&self) -> Option<Point> {
         self.origin
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::is_navigable_url;
+
+    #[test]
+    fn navigable_url_guard_rejects_what_nsurl_rejects() {
+        // Real navigations pass.
+        assert!(is_navigable_url("https://example.com"));
+        assert!(is_navigable_url("http://localhost:3000/path?q=1"));
+        // Malformed strings that make NSURL return nil (and wry panic) are rejected.
+        assert!(!is_navigable_url("")); // empty
+        assert!(!is_navigable_url("http://foo bar")); // raw space (mistyped URL bar)
+        assert!(!is_navigable_url("data:text/html,<input id=box>")); // space inside markup
+        assert!(!is_navigable_url("not a url")); // no scheme + spaces
+        assert!(!is_navigable_url("example.com")); // bare host, no scheme
     }
 }
