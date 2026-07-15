@@ -8,9 +8,9 @@ An unofficial fork of Warp that adds a Cursor-style integrated browser wired to 
 
 On top of the stock Warp terminal, this fork adds a docked browser pane and an MCP server that lets CLI coding agents (Claude Code and others) drive it:
 
-- **Integrated WebView2 browser pane (Windows).** A native WebView2 child window rendered inside a standard Warp pane — resizable and splittable like any other pane in the layout.
+- **Integrated native browser pane.** A native webview rendered inside a standard Warp pane — resizable and splittable like any other pane in the layout. Backed by WebView2 on Windows and WKWebView on macOS.
 - **Auto-open on dev-server URLs.** Detects `localhost` URLs printed by dev-server processes and opens the browser pane automatically, even for backgrounded processes. Uses two detection paths: an instant terminal-output scan, and a polling grid-scan / port-watcher fallback that catches servers whose startup banner scrolled out of view.
-- **Browser toolbar.** Back / forward / reload, a URL bar, a button to open the DevTools window, a screenshot button, and an element-selector button.
+- **Browser toolbar.** Back / forward / reload, a URL bar, a DevTools button, a screenshot button, and an element-selector button. On macOS, back/forward and the programmatic DevTools window aren't available (WKWebView has no equivalent) — inspect via the page's right-click **Inspect Element** / Safari's Develop menu instead.
 - **Element selector → terminal.** Pick any element in the page and its HTML plus CSS selector are inserted directly into the active terminal's input, ready for your CLI coding agent to read.
 - **Screenshot → terminal.** Captures the page, saves it to a temp file, and inserts the file path into the active terminal input so an agent (or you) can reference it immediately.
 - **Toggle anywhere.** Click the globe icon in the titlebar or press `Ctrl+Shift+B` to show or hide the pane.
@@ -39,7 +39,21 @@ Tools exposed:
 
 ## Platform
 
-The browser pane and MCP server are **Windows only** for now (built on WebView2 and CDP). macOS and Linux support is planned but not yet implemented.
+The browser pane and MCP server run on **Windows and macOS**. Linux support is planned but not yet implemented.
+
+The two platforms use different native webviews, so a few behaviors differ:
+
+| Capability | Windows (WebView2) | macOS (WKWebView) |
+|---|---|---|
+| Render / navigate / reload | ✅ | ✅ |
+| Screenshot | ✅ CDP `Page.captureScreenshot` | ✅ `WKWebView.takeSnapshot` |
+| Click / type (agent automation) | ✅ CDP input events | ✅ synthesized via injected JS |
+| `evaluate` / console / element selector | ✅ | ✅ |
+| Auto-open on dev-server ports | ✅ | ✅ (`lsof`) |
+| Back / forward | ✅ | ❌ (no wry API) |
+| DevTools window | ✅ programmatic | Use right-click **Inspect Element** / Safari Develop menu |
+
+macOS is **Apple Silicon (arm64)** only for now; Intel builds are not yet published.
 
 ## Build from source
 
@@ -55,6 +69,22 @@ Known-good path on Windows:
    ```
    cargo build --bin warp-oss --features gui,release_bundle
    ```
+
+Known-good path on macOS (Apple Silicon):
+
+1. Install **Xcode** (the full app, not just the Command Line Tools — the Metal shader toolchain ships with Xcode), then:
+   ```
+   sudo xcodebuild -license accept
+   sudo xcode-select --switch /Applications/Xcode.app
+   xcodebuild -runFirstLaunch
+   xcodebuild -downloadComponent MetalToolchain
+   ```
+2. Install the toolchain and native deps: `rustup` (the repo pins the version via `rust-toolchain.toml`), plus `brew install cmake protobuf`.
+3. Build and run:
+   ```
+   ./script/run
+   ```
+   or build the binary directly with `cargo build --bin warp-oss --features gui`.
 
 ## Credit
 
